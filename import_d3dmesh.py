@@ -3,8 +3,11 @@ from .bpy_build import buildModel
 from .bpy_build import buildSkeleton
 import pickle
 import bpy
+import time
+import os
 
 def load_db(db_name : str, verbose = True):
+    start_time = time.time()
     import os, struct
 
     def printifv(x, end="\n"):
@@ -16,6 +19,7 @@ def load_db(db_name : str, verbose = True):
         printifv(f"Found pickled database @{path_to_pickled_db}, skipping reading unpickled variant")
         pdata = None
         with open(path_to_pickled_db, "rb") as f: pdata = f.read()
+        print(f"Read pickled DB in {time.time()-start_time:.2f}s")
         return pickle.loads(pdata)
         
     #TODO Handle missing DB
@@ -46,6 +50,7 @@ def load_db(db_name : str, verbose = True):
     
     with open(path_to_pickled_db, "wb") as f: f.write(pickle.dumps(db))
 
+    print(f"Read unpickled DB in {time.time()-start_time}s")
     return db
 
 def load_bones_db(verbose):
@@ -56,13 +61,15 @@ def load_tex_db(verbose):
 
 def import_d3dmesh(filepath,
                    verbose=False,
-                   uv_layers='MERGE',
+                   parse_uv_layers='MERGE',
                    early_game_fix=0,
                    parse_lods = False,
                    join_submeshes = True,
                    tex_db = {},
                    bone_db = {},
                    ) -> list[bpy.types.Object]:
+    start_time = time.time()
+    folder_path = os.path.dirname(filepath)
     f = open(filepath, 'rb')
     f = WBR(f)
     res = []
@@ -74,20 +81,21 @@ def import_d3dmesh(filepath,
     FaceB_array = []
     AllVert_array = []
     Normal_array = []
-    UV_array = []
+    UV0_array = []
+    UV1_array = []
     UV2_array = []
     UV3_array = []
     UV4_array = []
     UV5_array = []
-    UV6_array = []
     B1_array = []
     W1_array = []
     Color_array = []
+    Color2_array = []
     Alpha_array = []
     FixedBoneID_array = []
     BoneIDOffset_array = []
     PolyStruct_array = []
-    MatHash_array = []
+    Materials_array = []
     TexName_array = []
     FacePointCount = 0
     FacePointCountB = 0
@@ -115,7 +123,7 @@ def import_d3dmesh(filepath,
     print(f"Importing {D3DName} Version {VerNum}...")
     if VerNum != 55:
         print("Model format version 55 not supported!")
-        return
+        return []
 
     #Skipping Section 1 (Model Info) skipping
     printifv(f"Section 1 (Model Info) start @{f.tell()-1}")
@@ -127,7 +135,6 @@ def import_d3dmesh(filepath,
     MatCount = f.readLong()
     printifv(f"Material Count = {MatCount}")
 
-    MatHash_array = []
     #Parsing Material Info
     for m in range(MatCount):
         MatStart = f.tell()
@@ -150,8 +157,11 @@ def import_d3dmesh(filepath,
         printifv(f"Material #{m+1} start @{MatStart}, MatHeaderSize = {MatHeaderSize}, MatHeaderSizeB = {MatHeaderSizeB}")
         TexDifName = "undefined"
         printifv(f"Material Parameter Count = {MatParamCount}")
+        mat_data = {
+            "Diffuse" : "",
+            "Normal" : "",
+        }
         for mp in range(MatParamCount):
-            #TODO parse all MatSectHash
             MatSectHash2 = f"{f.readLong():x}"
             MatSectHash1 = f"{f.readLong():x}"
             MatSectCount = f.readLong()
@@ -197,17 +207,22 @@ def import_d3dmesh(filepath,
                         MatUnks = f.readLongs(6)
                 case ("52a09151", "f1c3f2c7"):
                     printifv("-----------")
-                    printifv(f"Material #{mp} uses following textures:")
+                    printifv(f"Material #{m} uses following textures:")
                     for param_sect in range(MatSectCount):
                         TypeHash2, TypeHash1 =  f"{f.readLong():x}", f"{f.readLong():x}"
-                        tex_type, tex_subtype = mat_type_lookup.get((TypeHash1, TypeHash2))
+                        tex_type, tex_subtype = mat_type_lookup.get((TypeHash1, TypeHash2), (TypeHash1, TypeHash2))
                         TexHash2, TexHash1 = f.readLongs(2)
                         lookup_tex_name = tex_db.get((TexHash1, TexHash2))
                         TexName = f"{TexHash1:x}{TexHash2:x}" if lookup_tex_name is None else lookup_tex_name
                         printifv(f"{tex_type}|{tex_subtype} - {TexName}")
+                        match tex_type:
+                            case "Diffuse": mat_data["Diffuse"] = TexName
+                            case "Normal": mat_data["Normal"] = TexName if TexName != "normalxy_000" else ""
         
-        MatHash_array.append({"MatHash1":MatHash1,"MatHash2":MatHash2,"TexDifName":TexName})
+        Materials_array.append(mat_data)
         f.seek_abs(MatHeaderSize)
+    Materials_array.append(Materials_array[0])
+    Materials_array = Materials_array[1:]
     
     printifv(f"Section 2 (Material Info) end @{f.tell()}")
     unk = f.readLong()
@@ -259,7 +274,7 @@ def import_d3dmesh(filepath,
                         }
                 )
             printifv(f"Bounding Box = {BoundingMinX, BoundingMinY, BoundingMinZ}|{BoundingMaxX, BoundingMaxY, BoundingMaxZ}")
-            printifv(f"VertStart @ {VertexStart}, Vertminmax = {VertexMin,VertexMax}, Polystart @{PolygonStart}, PolyCount = {PolygonCount}, FacePointCount = {FacePointCount}, Matnum {MatNum}, Unknowns = {unknown1, unknown2, unknown3, unknown4}")
+            printifv(f"VertStart @{VertexStart}, Vertminmax = {VertexMin,VertexMax}, Polystart @{PolygonStart}, PolyCount = {PolygonCount}, FacePointCount = {FacePointCount}, Matnum {MatNum}, Unknowns = {unknown1, unknown2, unknown3, unknown4}")
         f.seek_abs(Sect3AEnd)
 
         printifv(f"Section 3B start @{f.tell()}")
@@ -290,7 +305,7 @@ def import_d3dmesh(filepath,
             unknown4 = f.readLong() + 1
             
             printifv(f"Bounding Box = {BoundingMinX, BoundingMinY, BoundingMinZ}|{BoundingMaxX, BoundingMaxY, BoundingMaxZ}")
-            printifv(f"VertStart @ {VertexStart}, Vertminmax = {VertexMin,VertexMax}, Polystart @{PolygonStart}, PolyCount = {PolygonCount}, FacePointCount = {FacePointCount}, Matnum {MatNum}, Unknowns = {unknown1, unknown2, unknown3, unknown4}")
+            printifv(f"VertStart @{VertexStart}, Vertminmax = {VertexMin,VertexMax}, Polystart @{PolygonStart}, PolyCount = {PolygonCount}, FacePointCount = {FacePointCount}, Matnum {MatNum}, Unknowns = {unknown1, unknown2, unknown3, unknown4}")
 
         f.seek_abs(Sect3BEnd)
 
@@ -358,8 +373,6 @@ def import_d3dmesh(filepath,
         MatSubFloats = [MatSubFloatA,MatSubFloatB,MatSubFloatC,MatSubFloatD,]
         MatUnk = f.readLong()
         printifv(f"Floats = {MatFloats}, {MatSubFloats}")
-        for y in range(len(MatHash_array)):
-            pass
     f.seek_abs(Sect5End)
 
     Sect6End = f.tell() + f.readLong()
@@ -421,7 +434,7 @@ def import_d3dmesh(filepath,
         if (MeshFloatX != 0x00) : MeshOrient = "X"
         if (MeshFloatY != 0x00) : MeshOrient = "Y"
         if (MeshFloatZ != 0x00) : MeshOrient = "Z"
-        printifv(f"Flags = 0x{MeshFlag1:x}, 0x{MeshFlag2:x}, 0x{MeshFlag3:x}, 0x{MeshFlag4:x}, Orientation = {MeshOrient}")
+        printifv(f"Mesh Flags = 0x{MeshFlag1:x}, 0x{MeshFlag2:x}, 0x{MeshFlag3:x}, 0x{MeshFlag4:x}, Orientation = {MeshOrient}")
     
     printifv(f"Section 11 start @{f.tell()}")
 
@@ -429,7 +442,7 @@ def import_d3dmesh(filepath,
     VertFlags = f.readLong()
     Sect11AEnd = f.tell() + f.readLong()
     Sect11ACount = f.readLong()
-    printifv(f"Flags: 0x{VertFlags:x}, Count = {Sect11ACount}")
+    printifv(f"Flags: 0x{VertFlags:x}, VertCount = {VertCount}, Sect11Count = {Sect11ACount}")
 
     f.seek_abs(Sect11AEnd)
     printifv(f"Section 11B (UV Clamps) start @{f.tell()}")
@@ -462,12 +475,12 @@ def import_d3dmesh(filepath,
     HasBones        = False;    BonesFmt = 0
     HasColors       = False;    ColorsFmt = 0
     HasColors2      = False;    Colors2Fmt = 0
+    HasUV0          = False;    UV0Fmt = 0
     HasUV1          = False;    UV1Fmt = 0
     HasUV2          = False;    UV2Fmt = 0
     HasUV3          = False;    UV3Fmt = 0
     HasUV4          = False;    UV4Fmt = 0
     HasUV5          = False;    UV5Fmt = 0
-    HasUV6          = False;    UV6Fmt = 0
 
     match VertFlags:
         case 0x00 | 0x01 | 0x03 | 0x05 | 0x09 | 0x21: printifv(f"Unimportant VertexFlags")
@@ -505,19 +518,19 @@ def import_d3dmesh(filepath,
         printifv(f"Vertex Type = {VertType}, Format = {VertFormat},  Layer = {VertLayer}, Buffer Number = {VertBuffNum}, Offset = {VertOffset}", end=" ")
         match (VertType, VertLayer):
             case (1,1): HasVertex = VertBuffNum; VertexFmt = VertFormat     ; printifv(f"(Vertex Format)")
+            case (2,1): HasNormals = VertBuffNum; NormalsFmt = VertFormat   ; printifv(f"(Normals Format)")
+            case (2,2): HasBinormals = VertBuffNum; BinormalsFmt = VertFormat;printifv(f"(Binormals Format)")
+            case (3,1): HasTangents = VertBuffNum; TangentsFmt = VertFormat ; printifv(f"(Tangents Format)")
             case (4,1): HasWeights = VertBuffNum; WeightsFmt = VertFormat   ; printifv(f"(Weights Format)")
             case (5,1): HasBones = VertBuffNum; BonesFmt = VertFormat       ; printifv(f"(Bones Format)")
-            case (2,1): HasNormals = VertBuffNum; NormalsFmt = VertFormat   ; printifv(f"(Normals Format)")
-            case (3,1): HasTangents = VertBuffNum; TangentsFmt = VertFormat ; printifv(f"(Tangents Format)")
-            case (2,2): HasBinormals = VertBuffNum; BinormalsFmt = VertFormat;printifv(f"(Binormals Format)")
-            case (7,5): HasUV5 = VertBuffNum; UV5Fmt = VertFormat           ; printifv(f"(UV5 Format)")
-            case (7,6): HasUV6 = VertBuffNum; UV6Fmt = VertFormat           ; printifv(f"(UV6 Format)")
             case (6,1): HasColors = VertBuffNum; ColorsFmt = VertFormat     ; printifv(f"(Colors Format)")
             case (6,2): HasColors2 = VertBuffNum; Colors2Fmt = VertFormat   ; printifv(f"(Colors2 Format)")
-            case (7,1): HasUV1 = VertBuffNum; UV1Fmt = VertFormat           ; printifv(f"(UV1 Format)")
-            case (7,2): HasUV2 = VertBuffNum; UV2Fmt = VertFormat           ; printifv(f"(UV2 Format)")
-            case (7,3): HasUV3 = VertBuffNum; UV3Fmt = VertFormat           ; printifv(f"(UV3 Format)")
-            case (7,4): HasUV4 = VertBuffNum; UV4Fmt = VertFormat           ; printifv(f"(UV4 Format)")
+            case (7,1): HasUV0 = VertBuffNum; UV0Fmt = VertFormat           ; printifv(f"(UV0 Format)")
+            case (7,2): HasUV1 = VertBuffNum; UV1Fmt = VertFormat           ; printifv(f"(UV2 Format)")
+            case (7,3): HasUV2 = VertBuffNum; UV2Fmt = VertFormat           ; printifv(f"(UV2 Format)")
+            case (7,4): HasUV3 = VertBuffNum; UV3Fmt = VertFormat           ; printifv(f"(UV3 Format)")
+            case (7,5): HasUV4 = VertBuffNum; UV4Fmt = VertFormat           ; printifv(f"(UV4 Format)")
+            case (7,6): HasUV5 = VertBuffNum; UV5Fmt = VertFormat           ; printifv(f"(UV5 Format)")
             case _: print("Unknown vertex buffer combo")
     
     printifv(f"Writing down FacePointCounts... FaceBufferCount = {FaceBufferCount}")
@@ -569,7 +582,33 @@ def import_d3dmesh(filepath,
     if not HasVertex:
         return
     
-    printifv(f"Positions start @ {f.tell()}")
+    def parseUVs(f : WBR, format, num):
+        printifv(f"UV{num} start @{f.tell()}")
+        uv_array_temp = []
+        
+        uvxmult_temp, uvymult_temp = UVMults[num]
+        uvxstart_temp, uvystart_temp  = UVStarts[num]
+        match format:
+            case 3:
+                for x in range(VertCount):
+                    tu = f.readFloat()
+                    tv = f.readFloat() * -1 + 1
+                    uv_array_temp.append((tu,tv))
+            case 24:
+                for x in range(VertCount):
+                    tu = (f.readShort(signed=True) / 32767) * uvxmult_temp + uvxstart_temp
+                    tv = (f.readShort(signed=True) / 32767) * uvymult_temp + uvystart_temp
+                    tv = tv * -1 + 1
+                    uv_array_temp.append((tu,tv))
+            case 25:
+                for x in range(VertCount):
+                    tu = (f.readShort(signed=False) / 65535) * uvxmult_temp + uvxstart_temp
+                    tv = (f.readShort(signed=False) / 65535) * uvymult_temp + uvystart_temp
+                    tv = tv * -1 + 1
+                    uv_array_temp.append((tu,tv))
+        return uv_array_temp
+    
+    printifv(f"Positions start @{f.tell()}")
     match VertexFmt:
         case 4:
             for v in range(VertCount):
@@ -601,49 +640,98 @@ def import_d3dmesh(filepath,
         case _: printifv(f"Unknown position format {VertexFmt}")
     
     if HasWeights > 0:
-        pass
-        #printifv(f"Weights start @ {f.tell()}")
-        #TODO parse weights
+        printifv(f"Weights start @{f.tell()}")
+        match WeightsFmt:
+            case 27:
+                for x in range(VertCount):
+                    weights = [f.readShort(),f.readShort(),f.readShort(),f.readShort()]
+                    weights = [w / 65535 for w in weights]
+                    W1_array.append(weights)
+            case 42:
+                for x in range(VertCount):
+                    WeightVars = f.readLong(signed=True)
+                    W2 = (WeightVars & 0x3FF) / (1023*8) + (WeightVars >> 30) / 8
+                    W3 = ((WeightVars >> 10) & 0x3FF) / (1023*3)
+                    W4 = ((WeightVars >> 20) & 0x3FF) / (1023*4)
+                    W1 = 1 - W2 - W3 - W4
+                    W1_array.append((W1, W2, W3, W4))
+            case _: printifv("Unknown weights format")
 
     if HasBones > 0:
-        #TODO parse bones
-        pass
+        printifv(f"Bone IDs start @{f.tell()}")
+        match BonesFmt:
+            case 33:
+                for x in range(VertCount):
+                    B1_array.append((f.readByte(),f.readByte(),f.readByte(),f.readByte()))
+            case _: printifv("Unknown bones format")
+    
     if HasNormals > 0:
-        #TODO parse normals
-        pass
+        printifv(f"Normals start @{f.tell()}")
+        match NormalsFmt:
+            case 38:
+                for x in range(VertCount):
+                    Normal_array.append([n / 127 for n in f.readBytes(4)])
+            case 26:
+                for x in range(VertCount):
+                    Normal_array.append([n / 32767 for n in f.readShorts(4, signed=True)])
+            case _: printifv(f"Unknown Normals format")
+    
     if HasTangents > 0:
-        #TODO parse tangents
-        pass
+        printifv(f"Tangents(?) start @{f.tell()}")
+        match TangentsFmt:
+            case 38:
+                for x in range(VertCount):
+                    tns = [n / 127 for n in f.readBytes(4)]
+            case _: printifv(f"Unknown tangents format!")
+    
     if HasBinormals > 0:
-        #TODO parse binormals
-        pass
-    if HasUV5 > 0:
-        #TODO parse UV5
-        pass
-    if HasUV6 > 0:
-        #TODO parse UV6
-        pass
+        printifv(f"Binormals(?) start @{f.tell()}")
+        match BinormalsFmt:
+            case 38:
+                for x in range(VertCount):
+                    bn = [bnn / 127 for bnn in f.readBytes(4)]
+            case _: printifv(f"Unknown Binormals format!")
+    
+    if HasUV4 > 0: UV4_array = parseUVs(f, UV4Fmt, 4)
+    
+    if HasUV5 > 0: UV5_array = parseUVs(f, UV5Fmt, 5)
+    
     if HasColors > 0:
-        #TODO parse col
-        pass
-    if HasColors2 > 0:
-        #TODO parse col2
-        pass
-    if HasUV1 > 0:
-        #TODO parse UV1
-        pass
-    if HasUV2 > 0:
-        #TODO parse UV2
-        pass
-    if HasUV3 > 0:
-        #TODO parse UV3
-        pass
-    if HasUV4 > 0:
-        #TODO parse UV4
-        pass
+        
+        printifv(f"Colors start @{f.tell()}")
+        match ColorsFmt:
+            case 33 | 39:
+                for x in range(VertCount):
+                    r,g,b = f.readBytes(3)
+                    a = f.readByte() / 255
+                    Color_array.append((r,g,b,a))
+            case _: printifv("Unknown Colors format")
 
+    
+    if HasColors2 > 0:
+        printifv(f"Colors2 start @{f.tell()}")
+        match ColorsFmt:
+            case 33 | 39:
+                for x in range(VertCount):
+                    r,g,b = f.readBytes(3)
+                    a = f.readByte() / 255
+                    Color2_array.append((r,g,b,a))
+            case _: printifv("Unknown Colors2 format")
+    
+    if HasUV0 > 0: UV0_array = parseUVs(f, UV0Fmt, 0)
+    
+    if HasUV1 > 0: UV1_array = parseUVs(f, UV1Fmt, 1)
+    
+    if HasUV2 > 0: UV2_array = parseUVs(f, UV2Fmt, 2)
+    
+    if HasUV3 > 0: UV3_array = parseUVs(f, UV3Fmt, 3)
+
+    printifv("--------------Polystructs Array:")
     for polyn,polystruct in enumerate(PolyStruct_array):
         printifv(f"Polygon_Info_Dict #{polyn} {polystruct}")
+
+    printifv("--------------Materials Array:")
+    printifv(Materials_array)
     
     parse_lods = parse_lods and Sect3Count > 1
 
@@ -669,29 +757,34 @@ def import_d3dmesh(filepath,
             }
 
             res.append(lodmodel_data)
-        else:
+        
+        if not join_submeshes:
             for polynum,polystruct in enumerate(PolyStruct_array):
                 face_array = []
                 if polystruct['LODNum'] == lodnum:
                     vertexstart_offset = polystruct['VertexStart']
+                    mat_data = Materials_array[polystruct['MatNum']-2]
                     for y in range(polystruct['PolygonCount']):
                         Faces3 = AllFace_array[polystruct['PolygonStart']+y-1]
                         Faces3 = [fv + vertexstart_offset for fv in Faces3]
                         face_array.append(Faces3)
-                        mat_id_array.append(polystruct['MatNum'])
                         name = f"{D3DName}_" + f"{polynum}".zfill(3) + (f" (LOD #{lodnum})" if parse_lods else "")
                     lodmodel_data = {
                         "name": name,
                         "verts" : AllVert_array,
                         "faces" : face_array,
                         "offset_face_idxs" : -1,
+                        "materials" : [mat_data]
                     }
                     res.append(lodmodel_data)
 
     f.close()
     res_models = []
     for res_data in res:
+        res_data["folder_path"] = folder_path
+        if parse_uv_layers: res_data["uvs"] = [UV0_array, UV1_array, UV2_array, UV3_array, UV4_array, UV5_array]
         res_models.append(buildModel(**res_data))
+    printifv(f"Finished processing {D3DName} in {time.time()-start_time:.2f}s")
     return res_models
 
 mat_type_lookup = {

@@ -18,6 +18,7 @@ from .import_skl import import_skl
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
 from math import pi
+import time
 
 class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.d3dmesh"
@@ -59,14 +60,9 @@ class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
         description=""
     )
 
-    uv_layers : bpy.props.EnumProperty(
-        name="UV Layers",
-        items=[
-            ("MERGE",   "Merge", "", 0),
-            ("SPLIT",   "Split", "", 1),
-            ("NO",      "Ignore UVs", "", 2)
-        ],
-        default='NO',
+    parse_uv_layers : bpy.props.BoolProperty(
+        name="Parse UV Layers",
+        default=True,
     )
     
     parse_lods: bpy.props.BoolProperty(
@@ -120,6 +116,7 @@ class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
         if (self.parse_textures or self.parse_materials) and prefs.tex_names_cached_amt == 0:
             prefs.load_databases(force = False)
 
+        start_time = time.time()
         
         for f in self.files:            
             fpath = os.path.join(self.directory, f.name)
@@ -130,7 +127,7 @@ class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
                     new_objs = import_d3dmesh(
                         filepath=fpath,
                         verbose=self.verbose,
-                        uv_layers=self.uv_layers,
+                        parse_uv_layers=self.parse_uv_layers,
                         early_game_fix=self.early_game_fix,
                         parse_lods=self.parse_lods,
                         join_submeshes=self.join_submeshes,
@@ -151,8 +148,8 @@ class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
                     case _:
                         print(new_obj)
 
-
-        self.report({'INFO'}, "Finished!")
+        if self.verbose: print(f"Finished Importing in {time.time()-start_time:.2f}s")
+        self.report({'INFO'}, f"Finished Importing ({time.time()-start_time:.2f}s)")
         return {"FINISHED"}
     
     
@@ -164,9 +161,7 @@ class D3DMesh_ImportOperator(bpy.types.Operator, ImportHelper):
         layout.prop(self, "scale")
         layout.prop(self, "parse_materials", icon='MATERIAL_DATA')
         layout.prop(self, "parse_textures", icon='TEXTURE')
-        r = layout.row()
-        r.label(text="UV Layers: ", icon='UV_DATA')
-        r.prop(self, "uv_layers", text="")
+        layout.prop(self, "parse_uv_layers", icon='UV_DATA')
         layout.prop(self, "join_submeshes", icon='STICKY_UVS_LOC')
         layout.prop(self, "parse_lods", icon='MOD_MULTIRES')
         r = layout.row()

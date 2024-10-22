@@ -24,6 +24,10 @@ class WBR(BufferedReader):
   def readShort(self, signed = False):
     """Read short int"""
     return struct.unpack('h' if signed else 'H', self.read(2))[0]
+  
+  def readShorts(self, n : int, signed = False):
+    """read n short ints"""
+    return struct.unpack(('h' if signed else 'H')*n, self.read(2*n))
 
   def readByte(self):
     """Read single byte as int"""
