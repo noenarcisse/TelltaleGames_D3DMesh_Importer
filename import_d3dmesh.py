@@ -6,6 +6,8 @@ import bpy
 import time
 import os
 
+#changed line 107 > little endian for sam and max models
+
 def load_db(db_name : str, verbose = True):
     start_time = time.time()
     import os, struct
@@ -102,7 +104,10 @@ def import_d3dmesh(filepath,
 
 
     header = f.readLong()
-    HeaderMagic = header.to_bytes(4).decode('ascii')
+    #adding little endian for the mesh import, UV are broken though
+    #works for sam and max remastered
+    HeaderMagic = header.to_bytes(4, byteorder='little').decode('ascii')
+    #HeaderMagic = header.to_bytes(4).decode('ascii')
     printifv(f"HeaderMagic = {HeaderMagic}")
     FileSize = f.readLong()
     printifv(f"FileSize = {FileSize}")

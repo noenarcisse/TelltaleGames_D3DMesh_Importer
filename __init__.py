@@ -11,6 +11,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+#added bl info for blender 3.6
+bl_info = {
+    "name": "Telltale Games D3DMesh Importer",
+    "author": "WeaselOnAStick",
+    "version": (1, 0),
+    "blender": (2, 80, 0),
+    "location": "File > Import",
+    "description": "Import Telltale Games D3DMesh files",
+    "category": "Import-Export",
+}
+
 import bpy
 import os
 from .import_d3dmesh import import_d3dmesh
